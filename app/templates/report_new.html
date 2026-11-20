@@ -1,0 +1,404 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import button, card, chip, severity_badge, badge, input_field, textarea_field %}
+{% from "components/states.html" import empty_state %}
+
+{% block title %}Report a Road Hazard — SafeRoute{% endblock %}
+{% block meta_description %}Report potholes, road breaks, broken streetlights, and blocked footpaths on SafeRoute.{% endblock %}
+
+{% block head_extra %}
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6" x-data="reportNewForm()">
+  <div class="space-y-1">
+    <h1 class="text-2xl sm:text-3xl font-extrabold text-primary-dark tracking-tight">Report a Road Hazard</h1>
+    <p class="text-sm text-muted">Pinpoint the hazard, provide an evidence photo, and help your community travel safer.</p>
+  </div>
+
+  {# Safety Alert #}
+  <div class="p-4 rounded-card bg-amber-50 border border-amber-200 text-amber-900 flex items-start gap-3">
+    <svg class="h-5 w-5 text-amber-600 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+      <line x1="12" y1="9" x2="12" y2="13"></line>
+      <line x1="12" y1="17" x2="12.01" y2="17"></line>
+    </svg>
+    <div class="text-xs sm:text-sm">
+      <strong class="font-bold">Civic Safety Reminder:</strong>
+      Never photograph hazards while driving or riding. Always pull over and stop safely first.
+    </div>
+  </div>
+
+  <form
+    id="report-form"
+    method="post"
+    action="/reports"
+    enctype="multipart/form-data"
+    @submit.prevent="handleSubmit($event)"
+    class="space-y-6"
+  >
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="lat" :value="lat">
+    <input type="hidden" name="lng" :value="lng">
+    <input type="hidden" name="category" :value="selectedCategory">
+
+    {# Step 1: Pin Location #}
+    <div class="p-5 sm:p-6 bg-surface border border-border rounded-card shadow-card space-y-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-base font-bold text-primary-dark">1. Hazard Location</h2>
+          <p class="text-xs text-muted">Click or drag the map pin to mark the exact spot.</p>
+        </div>
+        <button
+          type="button"
+          @click="locateMe()"
+          class="text-xs font-semibold text-primary hover:text-primary-dark flex items-center gap-1.5"
+        >
+          <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path>
+          </svg>
+          <span>Use My Location</span>
+        </button>
+      </div>
+
+      <div id="pin-map" class="h-64 sm:h-72 w-full rounded-lg border border-border relative z-0"></div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-muted">
+        <div>Coordinates: <span class="font-mono text-ink font-semibold" x-text="lat ? lat.toFixed(5) + ', ' + lng.toFixed(5) : 'Select on map'"></span></div>
+        <div>
+          <input
+            type="text"
+            name="address_text"
+            x-model="addressText"
+            placeholder="Address or landmark (e.g. Near Metro Pillar 812)"
+            maxlength="300"
+            class="w-full text-xs rounded border border-border px-3 py-1.5 bg-canvas text-ink"
+          >
+        </div>
+      </div>
+    </div>
+
+    {# Step 2: Hazard Category #}
+    <div class="p-5 sm:p-6 bg-surface border border-border rounded-card shadow-card space-y-4">
+      <h2 class="text-base font-bold text-primary-dark">2. Hazard Category</h2>
+      <div class="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+        <template x-for="cat in categories" :key="cat.id">
+          <button
+            type="button"
+            @click="selectCategory(cat.id)"
+            :class="selectedCategory === cat.id ? 'bg-primary-soft text-primary-dark border-primary font-bold shadow-sm' : 'bg-surface text-ink border-border hover:bg-canvas font-medium'"
+            class="flex flex-col items-center justify-center p-3 rounded-xl border text-center transition-all duration-150 min-h-[72px]"
+          >
+            <span class="text-xl mb-1" x-text="cat.icon"></span>
+            <span class="text-xs" x-text="cat.label"></span>
+          </button>
+        </template>
+      </div>
+
+      {# AI Suggestion Chip #}
+      <div x-show="aiSuggestion" x-cloak class="mt-2 flex items-center gap-2">
+        <span class="text-xs text-muted">AI Suggestion:</span>
+        <button
+          type="button"
+          @click="selectCategory(aiSuggestion.category)"
+          class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-accent text-ink text-xs font-bold hover:brightness-95 transition-all"
+        >
+          <span x-text="'Suggested: ' + formatCategory(aiSuggestion.category) + ' (' + Math.round(aiSuggestion.confidence * 100) + '%)'"></span>
+          <span class="text-[10px] underline">Accept</span>
+        </button>
+      </div>
+    </div>
+
+    {# Step 3: Evidence Photograph #}
+    <div class="p-5 sm:p-6 bg-surface border border-border rounded-card shadow-card space-y-4">
+      <div class="flex items-center justify-between">
+        <h2 class="text-base font-bold text-primary-dark">3. Evidence Photograph (Required)</h2>
+        <span class="text-xs text-muted">Max 5 MB &middot; EXIF stripped for privacy</span>
+      </div>
+
+      <div class="flex flex-col sm:flex-row items-center gap-4">
+        <input
+          id="hazard-image"
+          type="file"
+          name="image"
+          accept="image/jpeg,image/png,image/webp"
+          required
+          @change="handleImageSelect($event)"
+          class="block w-full text-xs text-muted file:mr-4 file:py-2.5 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-primary file:text-white hover:file:bg-primary-dark file:cursor-pointer"
+        >
+        <button
+          type="button"
+          x-show="imageFile && !aiSuggestion"
+          @click="requestAiClassification()"
+          :disabled="aiLoading"
+          class="shrink-0 text-xs font-semibold px-3.5 py-2 rounded-full border border-primary text-primary hover:bg-primary-soft transition-colors flex items-center gap-1.5"
+        >
+          <span x-show="!aiLoading">✨ Auto-Detect Hazard</span>
+          <span x-show="aiLoading">Analyzing...</span>
+        </button>
+      </div>
+
+      {# Image Preview #}
+      <div x-show="imagePreview" x-cloak class="mt-3">
+        <img :src="imagePreview" alt="Hazard preview" class="h-40 w-auto rounded-lg object-cover border border-border">
+      </div>
+    </div>
+
+    {# Step 4: Description #}
+    <div class="p-5 sm:p-6 bg-surface border border-border rounded-card shadow-card space-y-4">
+      <h2 class="text-base font-bold text-primary-dark">4. Description</h2>
+      <textarea
+        name="description"
+        rows="3"
+        required
+        maxlength="2000"
+        x-model="description"
+        placeholder="Describe the hazard, its extent, and immediate danger to traffic or pedestrians..."
+        class="w-full rounded-lg border border-border p-3 text-sm text-ink bg-surface placeholder:text-muted/70 focus:border-primary focus:outline-none"
+      ></textarea>
+    </div>
+
+    {# Submit Button #}
+    <div class="flex items-center justify-end gap-3 pt-2">
+      <a href="/map" class="px-5 py-2.5 rounded-full border border-border text-sm font-semibold text-ink hover:bg-canvas">
+        Cancel
+      </a>
+      <button
+        type="submit"
+        :disabled="submitting || !lat || !selectedCategory || !description"
+        class="px-6 py-2.5 rounded-full bg-primary hover:bg-primary-dark text-white text-sm font-bold shadow transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+      >
+        <span x-show="submitting">Submitting...</span>
+        <span x-show="!submitting">Submit Hazard Report</span>
+      </button>
+    </div>
+  </form>
+
+  {# Duplicate Alert Modal #}
+  <div
+    x-show="duplicateModalOpen"
+    x-cloak
+    class="fixed inset-0 z-50 flex items-center justify-center bg-ink/50 p-4"
+  >
+    <div class="bg-surface rounded-card border border-border max-w-lg w-full p-6 space-y-4 shadow-elevated">
+      <div class="flex items-center gap-2.5 text-primary-dark">
+        <svg class="h-6 w-6 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="8" x2="12" y2="12"></line>
+          <line x1="12" y1="16" x2="12.01" y2="16"></line>
+        </svg>
+        <h3 class="text-lg font-bold">Similar Hazard Reported Nearby!</h3>
+      </div>
+      <p class="text-xs sm:text-sm text-muted leading-relaxed">
+        We found an active <strong class="text-ink" x-text="formatCategory(selectedCategory)"></strong> report within 30 meters of this spot. To keep community maps clean, you can add your confirmation instead of creating a duplicate.
+      </p>
+
+      <div class="p-3 bg-canvas border border-border rounded-lg text-xs space-y-1">
+        <div><strong>Existing Report:</strong> <span x-text="duplicateMatch ? duplicateMatch.description : ''"></span></div>
+        <div class="text-muted">Distance: <span x-text="duplicateMatch ? Math.round(duplicateMatch.distance_m) + ' meters away' : ''"></span></div>
+      </div>
+
+      <div class="flex flex-col sm:flex-row items-center justify-end gap-2 pt-2">
+        <button
+          type="button"
+          @click="submitAnyway()"
+          class="w-full sm:w-auto px-4 py-2 rounded-full border border-border text-xs font-semibold text-muted hover:text-ink"
+        >
+          Different, submit anyway
+        </button>
+        <button
+          type="button"
+          @click="confirmDuplicate()"
+          class="w-full sm:w-auto px-5 py-2 rounded-full bg-primary hover:bg-primary-dark text-white text-xs font-bold shadow-sm"
+        >
+          Same hazard, add my confirmation
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function reportNewForm() {
+  return {
+    lat: {{ map_config.fallbackLat }},
+    lng: {{ map_config.fallbackLng }},
+    selectedCategory: 'pothole',
+    addressText: '',
+    description: '',
+    imageFile: null,
+    imagePreview: null,
+    submitting: false,
+    aiLoading: false,
+    aiSuggestion: null,
+    duplicateModalOpen: false,
+    duplicateMatch: null,
+    map: null,
+    marker: null,
+    categories: [
+      { id: 'pothole', label: 'Pothole', icon: '🕳️' },
+      { id: 'road_break', label: 'Road Break', icon: '🚧' },
+      { id: 'streetlight', label: 'Streetlight', icon: '💡' },
+      { id: 'footpath', label: 'Footpath', icon: '🚶' },
+      { id: 'other', label: 'Other', icon: '⚠️' }
+    ],
+
+    init() {
+      this.$nextTick(() => {
+        this.initMap();
+      });
+    },
+
+    formatCategory(cat) {
+      if (!cat) return '';
+      return cat.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+    },
+
+    selectCategory(cat) {
+      this.selectedCategory = cat;
+    },
+
+    initMap() {
+      const container = document.getElementById('pin-map');
+      if (!container) return;
+      this.map = L.map(container).setView([this.lat, this.lng], 16);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap'
+      }).addTo(this.map);
+
+      this.marker = L.marker([this.lat, this.lng], { draggable: true }).addTo(this.map);
+      this.marker.on('dragend', (e) => {
+        const pos = e.target.getLatLng();
+        this.lat = pos.lat;
+        this.lng = pos.lng;
+      });
+
+      this.map.on('click', (e) => {
+        this.lat = e.latlng.lat;
+        this.lng = e.latlng.lng;
+        this.marker.setLatLng(e.latlng);
+      });
+    },
+
+    locateMe() {
+      if (!navigator.geolocation) return;
+      navigator.geolocation.getCurrentPosition((pos) => {
+        this.lat = pos.coords.latitude;
+        this.lng = pos.coords.longitude;
+        if (this.map && this.marker) {
+          this.map.setView([this.lat, this.lng], 17);
+          this.marker.setLatLng([this.lat, this.lng]);
+        }
+      });
+    },
+
+    handleImageSelect(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      this.imageFile = file;
+      this.imagePreview = URL.createObjectURL(file);
+      this.aiSuggestion = null;
+    },
+
+    async requestAiClassification() {
+      if (!this.imageFile) return;
+      this.aiLoading = true;
+      try {
+        const formData = new FormData();
+        formData.append('image', this.imageFile);
+        formData.append('csrf_token', '{{ csrf_token }}');
+        const resp = await fetch('/reports/suggest-category', {
+          method: 'POST',
+          body: formData,
+          headers: { 'X-CSRF-Token': '{{ csrf_token }}' }
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data && data.category) {
+            this.aiSuggestion = data;
+          }
+        }
+      } catch (err) {
+        console.warn('AI categorization request failed:', err);
+      } finally {
+        this.aiLoading = false;
+      }
+    },
+
+    async handleSubmit(e) {
+      if (this.submitting) return;
+
+      // 1. Run duplicate check first
+      try {
+        const dupResp = await fetch('/reports/check-duplicate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '{{ csrf_token }}'
+          },
+          body: JSON.stringify({
+            lat: this.lat,
+            lng: this.lng,
+            category: this.selectedCategory
+          })
+        });
+        if (dupResp.ok) {
+          const dupData = await dupResp.json();
+          if (dupData && dupData.nearby_matches && dupData.nearby_matches.length > 0) {
+            this.duplicateMatch = dupData.nearby_matches[0];
+            this.duplicateModalOpen = true;
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('Duplicate check bypassed on network error');
+      }
+
+      // 2. Submit report directly
+      this.performDirectSubmit();
+    },
+
+    performDirectSubmit() {
+      this.submitting = true;
+      const formEl = document.getElementById('report-form');
+      formEl.submit();
+    },
+
+    submitAnyway() {
+      this.duplicateModalOpen = false;
+      this.performDirectSubmit();
+    },
+
+    async confirmDuplicate() {
+      if (!this.duplicateMatch) return;
+      this.submitting = true;
+      try {
+        const resp = await fetch('/reports/confirm-duplicate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '{{ csrf_token }}'
+          },
+          body: JSON.stringify({
+            report_id: this.duplicateMatch.id,
+            category: this.selectedCategory,
+            lat: this.lat,
+            lng: this.lng
+          })
+        });
+        if (resp.ok) {
+          window.location.href = '/reports/' + this.duplicateMatch.id;
+        } else {
+          this.performDirectSubmit();
+        }
+      } catch (err) {
+        this.performDirectSubmit();
+      }
+    }
+  };
+}
+</script>
+{% endblock %}

@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import severity_badge, badge %}
+
+{% block title %}Municipal Escalations Dashboard — SafeRoute Admin{% endblock %}
+{% block meta_description %}Review and escalate critical road hazards to municipal authorities.{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6" x-data="adminEscalations()">
+  <div class="space-y-1">
+    <div class="flex items-center gap-2">
+      <h1 class="text-2xl sm:text-3xl font-extrabold text-primary-dark tracking-tight">Municipal Escalations</h1>
+      <span class="inline-flex items-center rounded-full bg-accent px-2.5 py-0.5 text-xs font-bold text-ink">
+        Admin Portal
+      </span>
+    </div>
+    <p class="text-xs sm:text-sm text-muted">
+      High-severity road hazards flagged by the community for formal administrative dispatch.
+    </p>
+  </div>
+
+  {# Escalations Table Card #}
+  <div class="bg-surface border border-border rounded-card shadow-card overflow-hidden">
+    <div class="p-4 sm:p-5 border-b border-border flex items-center justify-between">
+      <h2 class="text-base font-bold text-primary-dark">Critical Hazards Queue (Score $\ge 70$ or $\ge 5$ Confirms)</h2>
+      <span class="text-xs font-semibold text-muted">{{ escalations | length }} Hazards Flagged</span>
+    </div>
+
+    {% if escalations and escalations | length > 0 %}
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs sm:text-sm">
+          <thead class="bg-canvas border-b border-border text-muted font-bold uppercase text-[11px] tracking-wider">
+            <tr>
+              <th class="py-3 px-4">Hazard</th>
+              <th class="py-3 px-4">Location</th>
+              <th class="py-3 px-4">Severity</th>
+              <th class="py-3 px-4">Confirms</th>
+              <th class="py-3 px-4">Status</th>
+              <th class="py-3 px-4 text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-border/60">
+            {% for item in escalations %}
+              <tr class="hover:bg-canvas/60 transition-colors">
+                <td class="py-3.5 px-4 font-semibold text-ink">
+                  <div class="flex items-center gap-2">
+                    <span class="capitalize">{{ item.category | replace('_', ' ') }}</span>
+                  </div>
+                  <p class="text-xs text-muted font-normal truncate max-w-xs mt-0.5">{{ item.description }}</p>
+                </td>
+                <td class="py-3.5 px-4 text-ink max-w-xs truncate">
+                  {{ item.address_text or 'Pinned on roadway' }}
+                </td>
+                <td class="py-3.5 px-4">
+                  {% set band = 'high' if item.severity_score >= 70 else ('medium' if item.severity_score >= 40 else 'low') %}
+                  {{ severity_badge(level=band, score=item.severity_score, show_score=True) }}
+                </td>
+                <td class="py-3.5 px-4 font-mono font-bold text-ink">
+                  {{ item.confirm_count }}
+                </td>
+                <td class="py-3.5 px-4" id="status-cell-{{ item.id }}">
+                  {% if item.status == 'escalated' %}
+                    <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold sr-severity-high border">
+                      Escalated
+                    </span>
+                  {% elif item.status == 'fixed' %}
+                    <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold sr-severity-low border">
+                      Fixed
+                    </span>
+                  {% else %}
+                    <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold bg-primary-soft text-primary-dark border border-primary/20">
+                      Open (Action Required)
+                    </span>
+                  {% endif %}
+                </td>
+                <td class="py-3.5 px-4 text-right">
+                  {% if item.status != 'escalated' %}
+                    <button
+                      type="button"
+                      @click="openEscalateModal('{{ item.id }}', '{{ item.category }}', '{{ item.address_text or item.description | truncate(40) }}')"
+                      class="px-3.5 py-1.5 rounded-full bg-primary hover:bg-primary-dark text-white text-xs font-bold transition-colors shadow-sm"
+                    >
+                      Escalate
+                    </button>
+                  {% else %}
+                    <span class="text-xs text-muted italic">Dispatched</span>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="p-8 text-center text-muted text-xs sm:text-sm">
+        No critical road hazards currently require municipal escalation.
+      </div>
+    {% endif %}
+  </div>
+
+  {# Escalation Modal #}
+  <div
+    x-show="modalOpen"
+    x-cloak
+    class="fixed inset-0 z-50 flex items-center justify-center bg-ink/50 p-4"
+  >
+    <div class="bg-surface rounded-card border border-border max-w-md w-full p-6 space-y-4 shadow-elevated">
+      <div class="flex items-center justify-between">
+        <h3 class="text-base font-bold text-primary-dark">Escalate Hazard to Authority</h3>
+        <button type="button" @click="modalOpen = false" class="text-muted hover:text-ink text-sm">&times;</button>
+      </div>
+
+      <p class="text-xs text-muted" x-text="'Hazard: ' + targetCategory + ' (' + targetLocation + ')'"></p>
+
+      <form
+        id="escalate-form"
+        method="post"
+        :action="'/admin/escalations/' + targetId"
+        @submit.prevent="submitEscalation($event)"
+        class="space-y-4"
+      >
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <div>
+          <label class="block text-xs font-bold text-ink mb-1">Responsible Authority / Department</label>
+          <input
+            type="text"
+            name="authority_name"
+            required
+            x-model="authorityName"
+            placeholder="e.g. GHMC Kukatpally Engineering Division"
+            class="w-full text-xs sm:text-sm rounded-lg border border-border p-2.5 text-ink bg-surface"
+          >
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold text-ink mb-1">Internal Dispatch Note</label>
+          <textarea
+            name="note"
+            rows="3"
+            x-model="note"
+            placeholder="Reference work order ID, municipal liaison contact, or priority alert details..."
+            class="w-full text-xs sm:text-sm rounded-lg border border-border p-2.5 text-ink bg-surface"
+          ></textarea>
+        </div>
+
+        <div class="flex items-center justify-end gap-2 pt-2">
+          <button
+            type="button"
+            @click="modalOpen = false"
+            class="px-4 py-2 rounded-full border border-border text-xs font-semibold text-muted hover:text-ink"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            :disabled="submitting || !authorityName"
+            class="px-5 py-2 rounded-full bg-severity-high hover:bg-red-700 text-white text-xs font-bold shadow-sm disabled:opacity-50"
+          >
+            <span x-show="!submitting">Confirm Escalation</span>
+            <span x-show="submitting">Updating...</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+function adminEscalations() {
+  return {
+    modalOpen: false,
+    targetId: '',
+    targetCategory: '',
+    targetLocation: '',
+    authorityName: 'GHMC Kukatpally Engineering Division',
+    note: '',
+    submitting: false,
+
+    openEscalateModal(id, cat, loc) {
+      this.targetId = id;
+      this.targetCategory = cat;
+      this.targetLocation = loc;
+      this.modalOpen = true;
+    },
+
+    async submitEscalation(e) {
+      this.submitting = true;
+      try {
+        const formData = new FormData();
+        formData.append('authority_name', this.authorityName);
+        formData.append('note', this.note);
+        formData.append('csrf_token', '{{ csrf_token }}');
+
+        const resp = await fetch('/admin/escalations/' + this.targetId, {
+          method: 'POST',
+          body: formData,
+          headers: { 'X-CSRF-Token': '{{ csrf_token }}' }
+        });
+
+        if (resp.ok) {
+          const cell = document.getElementById('status-cell-' + this.targetId);
+          if (cell) {
+            cell.innerHTML = `
+              <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold sr-severity-high border">
+                Escalated to ${this.authorityName}
+              </span>
+            `;
+          }
+          this.modalOpen = false;
+        }
+      } catch (err) {
+        console.warn('Escalation failed:', err);
+      } finally {
+        this.submitting = false;
+      }
+    }
+  };
+}
+</script>
+{% endblock %}

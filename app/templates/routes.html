@@ -1,0 +1,319 @@
+{% extends "base.html" %}
+
+{% block title %}Hazard-Aware Route Planner — SafeRoute{% endblock %}
+{% block meta_description %}Plan routes scored and ranked by community road-hazard severity.{% endblock %}
+
+{% block head_extra %}
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6" x-data="routePlanner()">
+  <div class="space-y-1">
+    <h1 class="text-2xl sm:text-3xl font-extrabold text-primary-dark tracking-tight">Hazard-Aware Route Planner</h1>
+    <p class="text-xs sm:text-sm text-muted">Compare alternative routes ranked by real-time community road hazards and potholes.</p>
+  </div>
+
+  {# Civic Disclaimer #}
+  <div class="p-4 rounded-card bg-primary-soft/80 border border-primary/20 text-primary-dark text-xs sm:text-sm flex items-start gap-2.5">
+    <svg class="h-5 w-5 text-primary shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="10"></circle>
+      <line x1="12" y1="12" x2="12" y2="16"></line>
+      <line x1="12" y1="8" x2="12.01" y2="8"></line>
+    </svg>
+    <p>
+      <strong>Civic Awareness Disclaimer:</strong> Routes are ranked using community-reported hazards only. SafeRoute does not guarantee any route is safe or road conditions are hazard-free.
+    </p>
+  </div>
+
+  {# Inputs & Map Grid #}
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    {# Left 1 Col: Route Inputs & Results #}
+    <div class="space-y-5">
+      <div class="p-5 bg-surface border border-border rounded-card shadow-card space-y-4">
+        <h2 class="text-base font-bold text-primary-dark">Plan Your Journey</h2>
+
+        <div class="space-y-3">
+          {# Origin #}
+          <div>
+            <label class="block text-xs font-bold text-ink mb-1">Start Location (A)</label>
+            <div class="flex items-center gap-1.5">
+              <input
+                type="text"
+                readonly
+                :value="startLat ? startLat.toFixed(4) + ', ' + startLng.toFixed(4) : 'Click on map or pick preset'"
+                class="w-full text-xs rounded border border-border p-2 bg-canvas font-mono text-ink"
+              >
+              <button
+                type="button"
+                @click="setStartKukatpally()"
+                title="Kukatpally Y Junction"
+                class="px-2 py-1.5 text-[11px] rounded border border-border bg-surface font-semibold text-primary hover:bg-primary-soft whitespace-nowrap"
+              >
+                Y Junction
+              </button>
+            </div>
+          </div>
+
+          {# Destination #}
+          <div>
+            <label class="block text-xs font-bold text-ink mb-1">Destination (B)</label>
+            <div class="flex items-center gap-1.5">
+              <input
+                type="text"
+                readonly
+                :value="endLat ? endLat.toFixed(4) + ', ' + endLng.toFixed(4) : 'Click on map or pick preset'"
+                class="w-full text-xs rounded border border-border p-2 bg-canvas font-mono text-ink"
+              >
+              <button
+                type="button"
+                @click="setEndJntu()"
+                title="JNTU College"
+                class="px-2 py-1.5 text-[11px] rounded border border-border bg-surface font-semibold text-primary hover:bg-primary-soft whitespace-nowrap"
+              >
+                JNTU Metro
+              </button>
+            </div>
+          </div>
+
+          <div class="pt-2">
+            <button
+              type="button"
+              @click="calculateRoutes()"
+              :disabled="loading || !startLat || !endLat"
+              class="w-full py-2.5 rounded-full bg-primary hover:bg-primary-dark text-white text-xs sm:text-sm font-bold shadow transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              <span x-show="!loading">🔍 Find Safest Route</span>
+              <span x-show="loading">Evaluating road hazards...</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {# Route Evaluation Cards #}
+      <div x-show="routes.length > 0" x-cloak class="space-y-3">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-muted">Evaluated Alternatives</h3>
+        <template x-for="(r, idx) in routes" :key="idx">
+          <div
+            @click="highlightRoute(idx)"
+            :class="selectedRouteIndex === idx ? 'border-primary ring-2 ring-primary/20 bg-primary-soft/40' : 'border-border bg-surface hover:bg-canvas'"
+            class="p-4 rounded-xl border cursor-pointer transition-all space-y-2 shadow-sm"
+          >
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span
+                  class="h-3 w-3 rounded-full"
+                  :style="'background-color: ' + (idx === 0 ? '#106EBE' : (idx === 1 ? '#F5A524' : '#5B6B7C'))"
+                ></span>
+                <span class="text-sm font-bold text-ink" x-text="r.summary || ('Alternative ' + (idx + 1))"></span>
+              </div>
+              <template x-if="r.is_safest">
+                <span class="px-2 py-0.5 rounded-full bg-accent text-ink text-[11px] font-extrabold">
+                  🌟 Safest Route
+                </span>
+              </template>
+            </div>
+
+            <div class="grid grid-cols-3 gap-2 text-xs pt-1">
+              <div>
+                <span class="text-muted block text-[10px]">Duration</span>
+                <span class="font-bold text-ink" x-text="Math.round(r.duration_minutes) + ' mins'"></span>
+              </div>
+              <div>
+                <span class="text-muted block text-[10px]">Distance</span>
+                <span class="font-bold text-ink" x-text="r.distance_km + ' km'"></span>
+              </div>
+              <div>
+                <span class="text-muted block text-[10px]">Hazards</span>
+                <span
+                  class="font-bold"
+                  :class="r.hazard_count > 0 ? 'text-severity-high' : 'text-severity-low'"
+                  x-text="r.hazard_count + ' detected'"
+                ></span>
+              </div>
+            </div>
+
+            <div class="text-[11px] text-muted flex items-center justify-between pt-1 border-t border-border/60">
+              <span>Safety Penalty Score:</span>
+              <span class="font-mono font-bold text-ink" x-text="r.route_score"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    {# Right 2 Cols: Interactive Map #}
+    <div class="lg:col-span-2">
+      <div class="bg-surface border border-border rounded-card p-1 shadow-card relative">
+        <div id="route-map" class="h-[480px] sm:h-[560px] w-full rounded-lg relative z-0"></div>
+        <div class="p-3 text-[11px] text-muted flex items-center justify-between bg-canvas rounded-b-lg border-t border-border">
+          <span>Click map to set Origin (1st click) and Destination (2nd click).</span>
+          <span class="font-semibold text-ink">Corridor Buffer: 25 meters</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function routePlanner() {
+  return {
+    startLat: {{ map_config.fallbackLat }},
+    startLng: {{ map_config.fallbackLng }},
+    endLat: 17.4981,
+    endLng: 78.3912,
+    loading: false,
+    routes: [],
+    selectedRouteIndex: 0,
+    map: null,
+    startMarker: null,
+    endMarker: null,
+    routeLayers: [],
+    hazardMarkers: [],
+    settingStart: true,
+
+    init() {
+      this.$nextTick(() => {
+        this.initMap();
+        this.calculateRoutes();
+      });
+    },
+
+    setStartKukatpally() {
+      this.startLat = 17.4849;
+      this.startLng = 78.4138;
+      this.updateMarkers();
+    },
+
+    setEndJntu() {
+      this.endLat = 17.4981;
+      this.endLng = 78.3912;
+      this.updateMarkers();
+    },
+
+    initMap() {
+      const el = document.getElementById('route-map');
+      if (!el) return;
+      this.map = L.map(el).setView([this.startLat, this.startLng], 14);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap'
+      }).addTo(this.map);
+
+      this.updateMarkers();
+
+      this.map.on('click', (e) => {
+        if (this.settingStart) {
+          this.startLat = e.latlng.lat;
+          this.startLng = e.latlng.lng;
+          this.settingStart = false;
+        } else {
+          this.endLat = e.latlng.lat;
+          this.endLng = e.latlng.lng;
+          this.settingStart = true;
+        }
+        this.updateMarkers();
+      });
+    },
+
+    updateMarkers() {
+      if (!this.map) return;
+      if (this.startMarker) this.map.removeLayer(this.startMarker);
+      if (this.endMarker) this.map.removeLayer(this.endMarker);
+
+      if (this.startLat && this.startLng) {
+        this.startMarker = L.marker([this.startLat, this.startLng], {
+          title: 'Start Location'
+        }).addTo(this.map).bindPopup('<strong>Start Location (A)</strong>');
+      }
+      if (this.endLat && this.endLng) {
+        this.endMarker = L.marker([this.endLat, this.endLng], {
+          title: 'Destination'
+        }).addTo(this.map).bindPopup('<strong>Destination (B)</strong>');
+      }
+    },
+
+    async calculateRoutes() {
+      if (!this.startLat || !this.endLat) return;
+      this.loading = true;
+      try {
+        const formData = new FormData();
+        formData.append('start_lat', this.startLat);
+        formData.append('start_lng', this.startLng);
+        formData.append('end_lat', this.endLat);
+        formData.append('end_lng', this.endLng);
+        formData.append('csrf_token', '{{ csrf_token }}');
+
+        const resp = await fetch('/api/routes/plan', {
+          method: 'POST',
+          body: formData,
+          headers: { 'X-CSRF-Token': '{{ csrf_token }}' }
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          this.routes = data.routes || [];
+          this.renderRoutesOnMap();
+        }
+      } catch (err) {
+        console.warn('Failed to plan routes:', err);
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    renderRoutesOnMap() {
+      // Clear old layers
+      this.routeLayers.forEach(l => this.map.removeLayer(l));
+      this.routeLayers = [];
+      this.hazardMarkers.forEach(m => this.map.removeLayer(m));
+      this.hazardMarkers = [];
+
+      if (!this.routes.length) return;
+
+      const colors = ['#106EBE', '#F5A524', '#5B6B7C'];
+      const bounds = L.latLngBounds();
+
+      this.routes.forEach((r, idx) => {
+        if (!r.geometry || !r.geometry.coordinates) return;
+        // GeoJSON is [lng, lat], Leaflet wants [lat, lng]
+        const latlngs = r.geometry.coordinates.map(c => [c[1], c[0]]);
+        const poly = L.polyline(latlngs, {
+          color: colors[idx % colors.length],
+          weight: idx === this.selectedRouteIndex ? 6 : 4,
+          opacity: idx === this.selectedRouteIndex ? 0.9 : 0.6
+        }).addTo(this.map);
+
+        poly.on('click', () => this.highlightRoute(idx));
+        this.routeLayers.push(poly);
+        latlngs.forEach(ll => bounds.extend(ll));
+
+        // Render hazards along the route
+        if (idx === this.selectedRouteIndex && r.hazards) {
+          r.hazards.forEach(h => {
+            const hMarker = L.circleMarker([h.lat, h.lng], {
+              radius: 6,
+              color: '#D92D20',
+              fillColor: '#D92D20',
+              fillOpacity: 0.9
+            }).addTo(this.map).bindPopup(
+              `<strong>${h.category.toUpperCase()}</strong><br>${h.description}<br><small>Severity: ${h.severity_score}</small>`
+            );
+            this.hazardMarkers.push(hMarker);
+          });
+        }
+      });
+
+      if (bounds.isValid()) {
+        this.map.fitBounds(bounds, { padding: [40, 40] });
+      }
+    },
+
+    highlightRoute(idx) {
+      this.selectedRouteIndex = idx;
+      this.renderRoutesOnMap();
+    }
+  };
+}
+</script>
+{% endblock %}

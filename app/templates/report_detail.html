@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+{% from "components/ui.html" import button, card, severity_badge, badge %}
+
+{% block title %}Hazard #{{ report.id[:8] }} Details — SafeRoute{% endblock %}
+{% block meta_description %}View details, community verifications, and severity score for this road hazard.{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
+  {# Back Button & Header #}
+  <div class="flex items-center justify-between">
+    <a href="/map" class="inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-primary hover:text-primary-dark">
+      <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="15 18 9 12 15 6"></polyline>
+      </svg>
+      <span>Back to Map</span>
+    </a>
+
+    <div class="flex items-center gap-2">
+      {{ severity_badge(level=report.severity_band, score=report.severity_score, show_score=True) }}
+      {% if report.status == 'escalated' %}
+        {{ badge(label='Escalated to Authority', variant='escalated') }}
+      {% elif report.status == 'fixed' %}
+        {{ badge(label='Fixed', variant='fixed') }}
+      {% else %}
+        {{ badge(label='Open', variant='primary') }}
+      {% endif %}
+    </div>
+  </div>
+
+  {# Main Report Title #}
+  <div class="space-y-1">
+    <div class="flex items-center gap-2.5">
+      <h1 class="text-2xl sm:text-3xl font-extrabold text-primary-dark tracking-tight capitalize">
+        {{ report.category | replace('_', ' ') }}
+      </h1>
+      <span class="text-xs px-2.5 py-0.5 rounded-full bg-canvas text-muted border border-border">
+        Confidence: <strong class="capitalize text-ink">{{ report.confidence }}</strong>
+      </span>
+    </div>
+    <p class="text-xs sm:text-sm text-muted">
+      Reported {{ report.created_at[:10] }} &middot; Coordinates: <span class="font-mono">{{ report.lat | round(5) }}, {{ report.lng | round(5) }}</span>
+    </p>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    {# Left 2 Cols: Details & Media #}
+    <div class="lg:col-span-2 space-y-6">
+      {# Description & Location Card #}
+      <div class="p-5 sm:p-6 bg-surface border border-border rounded-card shadow-card space-y-4">
+        <div>
+          <h2 class="text-xs font-bold uppercase tracking-wider text-muted">Location Details</h2>
+          <p class="text-sm font-semibold text-ink mt-0.5">{{ report.address_text or 'Exact spot pinned on roadway' }}</p>
+        </div>
+
+        <div>
+          <h2 class="text-xs font-bold uppercase tracking-wider text-muted">Citizen Description</h2>
+          <p class="text-sm text-ink leading-relaxed mt-1 whitespace-pre-line">{{ report.description }}</p>
+        </div>
+      </div>
+
+      {# Photo Evidence Gallery #}
+      <div class="p-5 sm:p-6 bg-surface border border-border rounded-card shadow-card space-y-4">
+        <h2 class="text-base font-bold text-primary-dark">Evidence Photographs</h2>
+        {% if report.images and report.images | length > 0 %}
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {% for img in report.images %}
+              <div class="space-y-1.5">
+                <div class="aspect-video w-full rounded-lg overflow-hidden bg-canvas border border-border flex items-center justify-center">
+                  {% if img.signed_url %}
+                    <img src="{{ img.signed_url }}" alt="Evidence photo" class="w-full h-full object-cover">
+                  {% else %}
+                    <div class="text-center p-4 text-xs text-muted">
+                      <span class="text-2xl block mb-1">📸</span>
+                      <span>Evidence file attached</span>
+                    </div>
+                  {% endif %}
+                </div>
+                <div class="flex items-center justify-between text-[11px] text-muted">
+                  <span class="capitalize font-semibold">{{ img.kind }} Photo</span>
+                  <span>{{ img.created_at[:10] }}</span>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="p-6 text-center rounded-lg bg-canvas border border-dashed border-border text-xs text-muted">
+            No photograph preview available for this report.
+          </div>
+        {% endif %}
+      </div>
+
+      {# Comments & Community Notes Thread #}
+      <div class="p-5 sm:p-6 bg-surface border border-border rounded-card shadow-card space-y-5">
+        <h2 class="text-base font-bold text-primary-dark">Community Discussion</h2>
+
+        {# Comment Submission Form (HTMX) #}
+        <form
+          hx-post="/reports/{{ report.id }}/comments"
+          hx-target="#comments-list"
+          hx-swap="beforeend"
+          hx-on::after-request="this.reset()"
+          class="space-y-3"
+        >
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <textarea
+            name="body"
+            rows="2"
+            required
+            maxlength="1000"
+            placeholder="Add an update, condition alert, or advice for commuters..."
+            class="w-full text-xs sm:text-sm rounded-lg border border-border p-3 text-ink bg-surface placeholder:text-muted/70 focus:border-primary focus:outline-none"
+          ></textarea>
+          <div class="flex justify-end">
+            <button
+              type="submit"
+              class="px-4 py-2 rounded-full bg-primary hover:bg-primary-dark text-white text-xs font-bold transition-colors shadow-sm"
+            >
+              Post Comment
+            </button>
+          </div>
+        </form>
+
+        {# Existing Comments #}
+        <div id="comments-list" class="space-y-3 pt-2">
+          {% if comments and comments | length > 0 %}
+            {% for c in comments %}
+              <div class="p-3.5 bg-canvas border border-border rounded-lg space-y-1">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-bold text-ink">{{ c.author_name }}</span>
+                  <span class="text-[11px] text-muted">{{ c.created_at[:10] }}</span>
+                </div>
+                <p class="text-xs sm:text-sm text-ink leading-relaxed">{{ c.body }}</p>
+              </div>
+            {% endfor %}
+          {% else %}
+            <p class="text-xs text-muted text-center py-3">No comments yet. Be the first to share an update!</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    {# Right 1 Col: Severity Breakdown & Verifications #}
+    <div class="space-y-6">
+      {# Severity Breakdown #}
+      <div class="p-5 sm:p-6 bg-surface border border-border rounded-card shadow-card space-y-4">
+        <div class="flex items-center justify-between">
+          <h2 class="text-base font-bold text-primary-dark">Severity Breakdown</h2>
+          <span class="text-xl font-extrabold text-primary-dark">{{ report.severity_score }}<span class="text-xs text-muted font-normal"> / 100</span></span>
+        </div>
+
+        <div class="space-y-2 text-xs">
+          <div class="flex justify-between py-1 border-b border-border/70">
+            <span class="text-muted">Hazard Type Base:</span>
+            <span class="font-bold text-ink">
+              {% if report.category == 'pothole' or report.category == 'road_break' %}+40
+              {% elif report.category == 'footpath' %}+35
+              {% elif report.category == 'streetlight' %}+25
+              {% else %}+15{% endif %}
+            </span>
+          </div>
+          <div class="flex justify-between py-1 border-b border-border/70">
+            <span class="text-muted">Evidence (Photos/AI):</span>
+            <span class="font-bold text-ink">+10</span>
+          </div>
+          <div class="flex justify-between py-1 border-b border-border/70">
+            <span class="text-muted">Community Verifications:</span>
+            <span class="font-bold text-ink">+{{ [report.confirm_count * 8, 24] | min - (report.dispute_count * 10) }}</span>
+          </div>
+          <div class="flex justify-between py-1">
+            <span class="text-muted">Recency Weight:</span>
+            <span class="font-bold text-ink">+10</span>
+          </div>
+        </div>
+
+        <div class="pt-2">
+          <div class="w-full bg-canvas rounded-full h-2.5 overflow-hidden border border-border">
+            <div
+              class="h-full rounded-full {% if report.severity_band == 'high' %}bg-severity-high{% elif report.severity_band == 'medium' %}bg-severity-medium{% else %}bg-severity-low{% endif %}"
+              style="width: {{ report.severity_score }}%"
+            ></div>
+          </div>
+        </div>
+      </div>
+
+      {# Community Verification Actions #}
+      <div class="p-5 sm:p-6 bg-surface border border-border rounded-card shadow-card space-y-4">
+        <h2 class="text-base font-bold text-primary-dark">Verify This Hazard</h2>
+        <p class="text-xs text-muted leading-relaxed">Have you driven or walked by this location? Help verify its status.</p>
+
+        <div id="vote-feedback"></div>
+
+        <div class="space-y-2 pt-1">
+          {# Confirm Button #}
+          <form hx-post="/reports/{{ report.id }}/vote" hx-target="#vote-feedback" hx-swap="innerHTML">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="vote" value="confirm">
+            <button
+              type="submit"
+              class="w-full py-2.5 px-4 rounded-full border border-primary text-primary hover:bg-primary-soft text-xs font-bold transition-colors flex items-center justify-between"
+            >
+              <span>👍 Confirm Hazard Exists</span>
+              <span class="text-xs bg-primary-soft px-2 py-0.5 rounded-full">{{ report.confirm_count }}</span>
+            </button>
+          </form>
+
+          {# Dispute Button #}
+          <form hx-post="/reports/{{ report.id }}/vote" hx-target="#vote-feedback" hx-swap="innerHTML">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="vote" value="dispute">
+            <button
+              type="submit"
+              class="w-full py-2.5 px-4 rounded-full border border-border text-muted hover:text-ink hover:bg-canvas text-xs font-semibold transition-colors flex items-center justify-between"
+            >
+              <span>👎 Dispute / Gone</span>
+              <span class="text-xs bg-canvas px-2 py-0.5 rounded-full">{{ report.dispute_count }}</span>
+            </button>
+          </form>
+
+          {# Vote Fixed Button #}
+          <form hx-post="/reports/{{ report.id }}/vote" hx-target="#vote-feedback" hx-swap="innerHTML" class="pt-2">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="vote" value="fixed">
+            <button
+              type="submit"
+              class="w-full py-2.5 px-4 rounded-full bg-severity-low text-white text-xs font-bold shadow hover:brightness-95 transition-all flex items-center justify-between"
+            >
+              <span>✅ Vote "This is Fixed"</span>
+              <span class="text-xs bg-white/20 px-2 py-0.5 rounded-full">{{ report.fixed_count }} / 2</span>
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
